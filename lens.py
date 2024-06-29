@@ -1,8 +1,10 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 
-MINIMUM_DISTANCE = 1e-6
+MINIMUM_DISTANCE = 0.1
 RAY_STRENGHT_THRESHOLD = 0.1
+ITERACTIONS_LIMIT = 10000
 
 class ray:
     def __init__(self, strenght : float, origin : tuple, dir : tuple, color = 'g'):
@@ -47,6 +49,17 @@ class ray:
             rays.append(ray(strenght=1, origin=start, dir=(np.cos(angle[i]), np.sin(angle[i])), color=color))
         return rays
     
+    @staticmethod
+    def from_segment(segment, n, direction, color='g'):
+
+        origins = np.linspace(segment[0], segment[1], n)
+
+        rays = []
+        for origin in origins:
+            rays.append(ray(strenght=1, origin=origin, dir=direction, color=color))
+        return rays
+
+    
     def __str__(self):
         return f"Strenght: {self.strength}, Origin: {self.origin}, Direction: {self.dir}, End: {self.end_point}, Length: {self.length}"
 
@@ -70,11 +83,14 @@ class lens:
         self.update()
 
     def update(self):
-        
-        
         self.calculate_segments()
         self.calculate_points()
         self.calculate_bounds()
+
+    def move(self, dx, dy):
+        self.x += dx
+        self.y += dy
+        self.update()
 
     def calculate_points(self):
 
@@ -121,10 +137,28 @@ class lens:
         for i in range(len(a)):
             dx += (4 + i*2) * a[i] * y**(4 + i*2 - 1)
 
+        dx = - dx
+        
         # Move the lense to the origin
         x -= min(x)
 
         return cls(x, y, dx, refidx_l, refidx_r, refl_coeff, trans_coeff)
+
+    @classmethod
+    def lens_segment(cls, res : int, start : np.array, end : np.array, refidx_l : float = 1, refidx_r : float = 1, refl_coeff : float = .01, trans_coeff : float = 0.9):
+
+        x = np.linspace(start[0], end[0], res)
+        y = np.linspace(start[1], end[1], res)
+        if end[1] == start [1]:
+            if start[0] > end[0]:
+                dx = np.array(res*np.inf)
+            else:
+                dx = -np.array(res*np.inf)
+        else:
+            dx = np.array(res* [ (start[0]-end[0])/(end[1]-start[1])])
+
+        return cls(x, y, dx, refidx_l, refidx_r, refl_coeff, trans_coeff)
+
 
     def plot(self, plt, plot_dx = False, plot_bounding_box = False, **kwargs):
 
@@ -223,46 +257,55 @@ def interpolate_dx(l : lens, intersection, segment, index):
 
     return dx
 
-def reflected_transmitted_rays(r : ray, l : lens, p : np.array, s : np.array, index): #TODO change to vector calculation
-    # Calculates the reflected and transmitted rays at a certain point in a certain segment
+def reflected_transmitted_rays(r : ray, l : lens, p : np.array, s : np.array, index):
 
     # Get the dx in the given point
     dx = interpolate_dx(l, s, p, index)
 
-    # Calculate the reflected and transmitted directions
-    # Incoming ray angle
-    t0 = np.arctan2(r.dir[1], r.dir[0])
+    # Calculate the normal of the lense from the dx
+    n = -np.array([1, dx])
+    n = n / np.linalg.norm(n)
 
-    # Angle of the function in the point
-    t1 = np.arctan2(dx, 1)
+    # Calculate the parallel component of the ray in respect to the normal
+    r_parallel = np.dot(r.dir, n) * n
 
-    # Snell angle (why the exp is zero?)
-    t2 = np.arcsin(l.refidx_l * np.sin(t0 + t1) / l.refidx_r)
+    # Calculate the perpendicular component of the ray in respect to the normal
+    r_perpend = r.dir - r_parallel
 
-    # Transmitted direction angle
-    t3 =  t2 - t1
+    n1 = l.refidx_l
+    n2 = l.refidx_r
 
-    # Resulting transmitted direction
-    transm_dir = (np.cos(t3), np.sin(t3))
+    # Source: https://physics.stackexchange.com/questions/435512/snells-law-in-vector-form
+    transmitted_dir = - np.sqrt(1 - (n1/n2)**2 * (1 - np.dot(n, r.dir)**2)) * n + (n1/n2) * (r.dir - np.dot(n, r.dir)*n)
 
-    # Reflected ray direction direction
-    refl_dir = (-np.cos(t0 - 2 * t1), -np.sin(t0 - 2 * t1)) #TODO check this!
+    reflected_ray = r_perpend - r_parallel
 
-    return refl_dir, transm_dir
 
-test_rays = ray.from_point(start=(-1, 0), n=10, angle_start=-1.4, angle_end=1.4, color='red')
-test_lens0 = lens.lens_asphere(res = 100, R = 1, k = 0, a = [2, -2], refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
+    return reflected_ray, transmitted_dir
+
+
+
+test_rays = ray.from_point(start=(-0.5, 0), n=12, angle_start=-1.2, angle_end=1.2, color='red')
+test_rays_seg = ray.from_segment(segment=((-1, -0.9), (-1, 0.9)), n=10, direction=(1, 0), color='blue')
+test_rays_segment = ray.from_segment(segment=((-0.5, -1), (0, 1)), n=100, direction=(1, 0), color='blue')
+test_lens0 = lens.lens_asphere(res = 100, R = 1, k = -1, a = [0], refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
 test_lens1 = lens.lens_asphere(res = 100, R = 1, k = -0.1, a = [0], refidx_l=1.5, refidx_r=1, refl_coeff=0.3)
-
+test_seg_lens = lens.lens_segment(res = 100, start = (1, -1), end = (-1, 1), refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
+test_seg_lens2 = lens.lens_segment(res = 100, start = (1, -1), end = (-1, 1), refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
+test_seg_lens2.move(0.3, 0)
 test_lens1.x += 0.2
 test_lens1.update()
 
-rays_pool = test_rays
+rays_pool = [ray(1, (1, 0.2), (-1, 0))]
+#rays_pool = test_rays_seg
 rays_done = []
 
-lenses = [test_lens0, test_lens1]
+lenses = [test_seg_lens2]
+print(test_lens0.dx)
 
 iterations = 0
+
+start_time = time.time()
 
 while len(rays_pool) > 0:
 
@@ -313,16 +356,16 @@ while len(rays_pool) > 0:
         
     else:
         #TODO, maybe terminate the ray at the limit of the current window? or inf (idk if possible)?
-        current_ray.end(current_ray.dir * 10)
+        current_ray.end(current_ray.origin + current_ray.dir * 10)
         rays_done.append(current_ray)
         continue
 
-    if iterations > 20:
+    if iterations >= ITERACTIONS_LIMIT:
         print("Iteractions limit reached")
         break
     else:
         iterations += 1
-
+print(f'Rendering time: {time.time() - start_time}')
 print(f'Iteractions: {iterations}')
 print(f'Rays:{len(rays_done)}')
 
@@ -339,4 +382,5 @@ for lens in lenses:
 for ray in rays_done:
     ray.plot(plt)
 
+plt.grid()
 plt.show()
