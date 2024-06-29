@@ -1,12 +1,14 @@
 import numpy as np
-from scipy.spatial import ConvexHull
 import matplotlib.pyplot as plt
+
+MINIMUM_DISTANCE = 1e-6
+RAY_STRENGHT_THRESHOLD = 0.1
 
 class ray:
     def __init__(self, strenght : float, origin : tuple, dir : tuple, color = 'g'):
         self.strength = strenght
-        self.origin = origin
-        self.dir = dir
+        self.origin = np.array(origin)
+        self.dir = np.array(dir)
         self.color = color
         self.end_point = None
         self.length = None
@@ -22,9 +24,9 @@ class ray:
         self.end_point = end_point
         self.length = np.linalg.norm(np.array(self.origin) - np.array(self.end_point))
 
-    def plot(self, plt, color = 'k', alpha = 1, arrow_type = 'small'):
+    def plot(self, plt, color = 'k', arrow_type = 'small'):
         if self.end_point is not None:
-            plt.plot([self.origin[0], self.end_point[0]], [self.origin[1], self.end_point[1]], color=color, alpha=alpha)
+            plt.plot([self.origin[0], self.end_point[0]], [self.origin[1], self.end_point[1]], color=color, alpha=self.strength)
         else:
         
 
@@ -37,16 +39,23 @@ class ray:
             plt.arrow(self.origin[0], self.origin[1], length*self.dir[0], length*self.dir[1], head_width=0.05, head_length=0.05, fc=color, ec=color, alpha=alpha)
         return
         
+    @staticmethod
+    def from_point(start, n, angle_start=0, angle_end=2*np.pi, color='g'):
+        rays = []
+        angle = np.linspace(angle_start, angle_end, n)
+        for i in range(n):
+            rays.append(ray(strenght=1, origin=start, dir=(np.cos(angle[i]), np.sin(angle[i])), color=color))
+        return rays
     
     def __str__(self):
         return f"Strenght: {self.strength}, Origin: {self.origin}, Direction: {self.dir}, End: {self.end_point}, Length: {self.length}"
-    
+
 class lens:
-    def __init__(self, x : list, y : list, dx : list, refidx_l : float, refidx_r : float, refl_coeff : float, trans_coeff : float):
-        
-        self.x = np.array(x)
-        self.dx = np.array(dx)
-        self.y = np.array(y)
+    def __init__(self, x : np.array, y : np.array, dx : np.array, refidx_l : float = 1, refidx_r : float = 1, refl_coeff : float = 0.1, trans_coeff : float = 0.9):
+
+        self.x = x
+        self.y = y
+        self.dx = dx
 
         self.refidx_l = refidx_l
         self.refidx_r = refidx_r
@@ -54,424 +63,280 @@ class lens:
         self.refl_coeff = refl_coeff
         self.trans_coeff = trans_coeff
 
+        self.points = []
+        self.segments = []
+        self.bounding_box = []
+
         self.update()
 
     def update(self):
-        self.segments = self.calculate_segments()
-        self.points = self.calculate_points()
+        
+        
+        self.calculate_segments()
+        self.calculate_points()
+        self.calculate_bounds()
 
     def calculate_points(self):
-        points = []
+
+        self.points = []
         for i in range(len(self.x)):
-            points.append((self.x[i], self.y[i]))
-        return points
-    
+            self.points.append(np.array(self.x[i], self.y[i]))
 
     def calculate_segments(self):
-        segments = []
+
+        self.segments = []
         for i in range(len(self.x)-1):
-            segments.append(((self.x[i], self.y[i]), (self.x[i+1], self.y[i+1])))
-        return segments
-    
-    def plot(self, plt):
+            start = np.array((self.x[i], self.y[i]))
+            end = np.array((self.x[i+1], self.y[i+1]))
+            self.segments.append((start, end))
+
+    def calculate_bounds(self):
+
+        self.bounding_box = []
+        self.bounding_box.append(np.array(((min(self.x), min(self.y)), (min(self.x), max(self.y)))))
+        self.bounding_box.append(np.array(((min(self.x), min(self.y)), (max(self.x), min(self.y)))))
+        self.bounding_box.append(np.array(((max(self.x), max(self.y)), (min(self.x), max(self.y)))))
+        self.bounding_box.append(np.array(((max(self.x), max(self.y)), (max(self.x), min(self.y)))))   
+
+    @classmethod
+    def lens_asphere(cls, res : int, R : float, k : float, a : list, refidx_l : float = 1, refidx_r : float = 1, refl_coeff : float = .01, trans_coeff : float = 0.9):
+
+        # Sample the -1 to 1 range with equidistant points
+        y = np.linspace(-1, 1, res)
+
+        sqrt_el = np.sqrt(1 - ((1 + k)*y**2)/R**2)
+
+        # Aspheric lense formula
+        x = y**2 / (R * (1 + sqrt_el)) -5
+
+        # Additional terms
+        for i in range(len(a)):
+            x += a[i] * y**(4 + i*2)
+
+        # Derivative
+        #https://www.wolframalpha.com/input?i=derivative+of+x%28y%29+%3D+y%5E2+%2F+%28R+%281+%2B+sqrt%281+-+%28%281+%2B+k%29+y%5E2%29+%2F+R%5E2%29%29%29+%2B+a4+y%5E4+%2B+a6+y%5E6
+        dx = 2*y / (R*(sqrt_el + 1)) + ((k + 1) * y**3) / (R**3*(sqrt_el)*(sqrt_el + 1)**2)
+
+        # Additional terms
+        for i in range(len(a)):
+            dx += (4 + i*2) * a[i] * y**(4 + i*2 - 1)
+
+        # Move the lense to the origin
+        x -= min(x)
+
+        return cls(x, y, dx, refidx_l, refidx_r, refl_coeff, trans_coeff)
+
+    def plot(self, plt, plot_dx = False, plot_bounding_box = False, **kwargs):
+
         for el in self.segments:
-            plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], alpha=0.5, color='black')
-        return
+            plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], **kwargs)
 
-    def intersect (self, r):
-
-        def intersect_ray_segment(ray, segment):
-            # Ray
-            o1 = np.array(ray.origin)
-            d1 = np.array(ray.dir)
-            # Segment
-            o2 = np.array(segment[0])
-            d2 = np.array(segment[1]) - np.array(segment[0])
-            
-            # Calculate intersection point
-            cross = np.cross(d1, d2)
-            if cross == 0:
-                return None
-            t1 = np.cross(o2 - o1, d2) / cross
-            t2 = np.cross(o2 - o1, d1) / cross
-            if t1 >= 0 and t2 >= 0 and t2 <= 1:
-                return o1 + t1 * d1
-            return None
-            
-        def find_ray_polygon_intersection(r):
-
-            intersection = None
-            intersected_segment = None
-
-            # Nudge the ray origin to avoid self-intersection
-            r.origin = (r.origin[0] + 1e-6 * r.dir[0], r.origin[1] + 1e-6 * r.dir[1])
-
-            for segment in self.segments:
-                intersection = intersect_ray_segment(r, segment)
-                if intersection is not None:
-                    intersected_segment = segment
-                    break
-            
-            return segment, intersection
         
-        def get_dx(segment, intersection):
-            # Calculates the distance between the two points of the intersected segment
-            # Then interpolates the value of dx at the intersection point
-            p1 = np.array(segment[0])
-            p2 = np.array(segment[1])
 
-            # Distances between the intersection point and the segment points
-            d1 = np.linalg.norm(p1 - intersection)
-            d2 = np.linalg.norm(p2 - intersection)
+        if plot_dx:
+            tmp_dx = self.dx - min(self.dx)
 
-            # Interpolated value of dx over the segment
-            dx = self.dx[self.segments.index(segment)] * (d2 / (d1 + d2)) + self.dx[self.segments.index(segment) + 1] * (d1 / (d1 + d2))
+            ratio = max(tmp_dx) / max(self.x)
 
-            return dx
-        
-        segment, intersection = find_ray_polygon_intersection(r)
-        
+            tmp_dx  /= ratio
+            for i in range(len(self.y)-1):
+                plt.plot([tmp_dx[i], tmp_dx[i+1]], [self.y[i], self.y[i+1]], alpha = 0.2, **kwargs)
+
+        if plot_bounding_box:
+            alpha = 0.3
+            linestyle='dashed'
+            plt.plot([0, 0], [min(self.y), max(self.y)], alpha = alpha, linestyle = linestyle, **kwargs)
+            plt.plot([max(self.x), max(self.x)], [min(self.y), max(self.y)], alpha = alpha, linestyle = linestyle, **kwargs)
+            plt.plot([0, max(self.x)], [min(self.y), min(self.y)], alpha = alpha, linestyle = linestyle, **kwargs)
+            plt.plot([0, max(self.x)], [max(self.y), max(self.y)], alpha = alpha, linestyle = linestyle, **kwargs)
+
+def ray_segment_intersect(r : ray, s : np.array):
+    # Ray
+    o1 = r.origin
+    d1 = r.dir
+    # Segment
+    o2 = s[0]
+    d2 = s[1] - s[0]
+
+    # Calculate intersection point
+    cross = np.cross(d1, d2)
+
+    # If the cross product is zero, the lines are parallel
+    if cross == 0:
+        return None
+    
+    
+    t1 = np.cross(o2 - o1, d2) / cross
+    t2 = np.cross(o2 - o1, d1) / cross
+    
+    if t1 >= 0 and t2 >= 0 and t2 <= 1:
+        return o1 + t1 * d1
+    
+    return None
+
+def ray_lens_bb_intersect(r : ray, l : lens):    
+    # Checks if a ray intersects with a lens' bounding box
+    
+    for segment in l.bounding_box:
+        intersection = ray_segment_intersect(r, segment)
         if intersection is not None:
+            return intersection
         
-            # Incoming ray
-            t0 = np.arctan2(r.dir[1], r.dir[0])
+    return None
 
-            # 
-            t1 = np.arctan2(get_dx(segment, intersection), 1)
+def ray_lens_intersect(r: ray, l: lens):
+    # Checks if a ray intersects with a lens
 
-            # snell angle
-            t2 = np.arcsin(self.refidx_l * np.sin(t0 + t1) / self.refidx_r)
+    hit = False
+    dist_min = np.inf
 
-            # transmitted ray
-            t3 =  t2 - t1
+    for i, segment in enumerate(l.segments):
+        intersection = ray_segment_intersect(r, segment)
 
-            # Transmitted ray direction
-            transm_dir = (np.cos(t3), np.sin(t3))
+        if intersection is not None:
+            hit = True
+            dist = np.linalg.norm(r.origin - intersection)
+            if dist < dist_min:
+                dist_min = dist
+                intersected_segment = segment
+                intersected_point = intersection
+                index = i
 
-            # Reflected ray direction
-            refl_dir = (-np.cos(t0 - 2 * t1), -np.sin(t0 - 2 * t1))
+    if hit:
+        return intersected_segment, intersected_point, index
+    else:
+        return None, None, None
 
-            r.end(intersection)
+def interpolate_dx(l : lens, intersection, segment, index):
+    
+    # Calculates the distance between the two points of the intersected segment
+    # Then interpolates the value of dx at the intersection point
+    p1 = np.array(segment[0])
+    p2 = np.array(segment[1])
 
-            transmitted_ray = ray.from_ray(r, transm_dir, self.trans_coeff)
-            reflected_ray = ray.from_ray(r, refl_dir, self.refl_coeff)
+    # Distances between the intersection point and the segment points
+    d1 = np.linalg.norm(p1 - intersection)
+    d2 = np.linalg.norm(p2 - intersection)
 
-            return reflected_ray, transmitted_ray
-        else:
-            return None, None
+    # Interpolated value of dx over the segment
+    dx = l.dx[index] * (d2 / (d1 + d2)) + l.dx[index + 1] * (d1 / (d1 + d2))
+
+    return dx
+
+def reflected_transmitted_rays(r : ray, l : lens, p : np.array, s : np.array, index): #TODO change to vector calculation
+    # Calculates the reflected and transmitted rays at a certain point in a certain segment
+
+    # Get the dx in the given point
+    dx = interpolate_dx(l, s, p, index)
+
+    # Calculate the reflected and transmitted directions
+    # Incoming ray angle
+    t0 = np.arctan2(r.dir[1], r.dir[0])
+
+    # Angle of the function in the point
+    t1 = np.arctan2(dx, 1)
+
+    # Snell angle (why the exp is zero?)
+    t2 = np.arcsin(l.refidx_l * np.sin(t0 + t1) / l.refidx_r)
+
+    # Transmitted direction angle
+    t3 =  t2 - t1
+
+    # Resulting transmitted direction
+    transm_dir = (np.cos(t3), np.sin(t3))
+
+    # Reflected ray direction direction
+    refl_dir = (-np.cos(t0 - 2 * t1), -np.sin(t0 - 2 * t1)) #TODO check this!
+
+    return refl_dir, transm_dir
+
+test_rays = ray.from_point(start=(-1, 0), n=10, angle_start=-1.4, angle_end=1.4, color='red')
+test_lens0 = lens.lens_asphere(res = 100, R = 1, k = 0, a = [2, -2], refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
+test_lens1 = lens.lens_asphere(res = 100, R = 1, k = -0.1, a = [0], refidx_l=1.5, refidx_r=1, refl_coeff=0.3)
+
+test_lens1.x += 0.2
+test_lens1.update()
+
+rays_pool = test_rays
+rays_done = []
+
+lenses = [test_lens0, test_lens1]
+
+iterations = 0
+
+while len(rays_pool) > 0:
+
+    # Pick the first ray of the pool
+    current_ray = rays_pool.pop(0)
+
+    # Check which lens can have an intersection using the bounding box (fast)
+
+    possible_lenses = []
+
+    for lens in lenses:
+        if ray_lens_bb_intersect(current_ray, lens) is not None:
+            possible_lenses.append(lens)
+
+    # From the possible lenses, calculate the actual intersections to find the closest
+
+    dist_min = np.inf
+    hit = False
+
+    for lens in possible_lenses:
+        segment, intersection, index = ray_lens_intersect(current_ray, lens)
+        if intersection is not None:
+            dist = np.linalg.norm(current_ray.origin - intersection)
+            if dist < dist_min and dist > MINIMUM_DISTANCE:
+                hit = True
+                dist_min = dist
+                intersected_segment = segment
+                intersected_point = intersection
+                intersected_lens = lens
+                intersected_index = index
+    if hit == True:
+        # Close the current ray
+        current_ray.end(intersected_point)
+        rays_done.append(current_ray)
+
+        # Calculate the reflected and transmitted rays
+        refl_dir, transm_dir = reflected_transmitted_rays(current_ray, intersected_lens, intersected_point, intersected_segment, intersected_index)
+
+        # Create the rays
+        reflected_ray = ray.from_ray(current_ray, refl_dir, intersected_lens.refl_coeff)
+        transmitted_ray = ray.from_ray(current_ray, transm_dir, intersected_lens.trans_coeff)
+
+        # Add the rays to the pool
+        if reflected_ray.strength > RAY_STRENGHT_THRESHOLD:
+            rays_pool.append(reflected_ray)
+        if transmitted_ray.strength > RAY_STRENGHT_THRESHOLD:
+            rays_pool.append(transmitted_ray)
         
-class lens_system:
-    def __init__(self, position):
-        self.position = position
-        self.lenses = []
-        self.boundaries = []
+    else:
+        #TODO, maybe terminate the ray at the limit of the current window? or inf (idk if possible)?
+        current_ray.end(current_ray.dir * 10)
+        rays_done.append(current_ray)
+        continue
 
-    def add_lens(self, lens, offset = (0, 0)):
-        lens.x += offset[0]
-        lens.y += offset[1]
-        lens.update()
-        self.lenses.append(lens)
+    if iterations > 20:
+        print("Iteractions limit reached")
+        break
+    else:
+        iterations += 1
 
-    def add_boundary(self, refl_coeff = 0):
-        # Get the miminum x value of the first lens
-        x_min = np.min(self.lenses[0].x)
+print(f'Iteractions: {iterations}')
+print(f'Rays:{len(rays_done)}')
 
-        # Get the maximum x value of the last lens
-        x_max = np.max(self.lenses[-1].x)
-
-        l_top = lens(x=[x_min, x_max], y=[1,1], dx=[np.inf, np.inf], refidx_l=1, refidx_r=1, refl_coeff = refl_coeff, trans_coeff=0)
-        l_bottom = lens(x=[x_min, x_max], y=[-1,-1], dx=[-np.inf, -np.inf], refidx_l=1, refidx_r=1, refl_coeff = refl_coeff, trans_coeff=0)
-                        
-        self.boundaries.append(l_top)
-        self.boundaries.append(l_bottom)
-
-    def intersect(self, rays, reflection_limit = 1):
-
-        rays_list = [rays]
-
-        for lens in self.lenses:
-            new_rays = []
-            for r in rays_list[-1]:
-                reflected, transmitted = lens.intersect(r)
-                if transmitted is not None:
-                    new_rays.append(transmitted)
-                else:
-                    for boundary in self.boundaries:
-                        _, _ = boundary.intersect(r)
-
-            rays_list.append(new_rays)
-
-        return rays_list
-        
-    
-    def plot(self, plt):
-        for lens in self.lenses:
-            lens.plot(plt)
-        for boundary in self.boundaries:
-            boundary.plot(plt)
-        return
-
-def lens_gen_linear(resolution, type):
-
-    y_values = np.linspace(-1, 1, resolution)
-
-    if type == 'linear+':
-        return {
-            'x_values' : y_values,
-            'dx' : [1]*resolution,
-            'y_values' : y_values
-        }
-    
-    if type == 'linear-':
-        return {
-            'x_values' : -y_values,
-            'dx' : [-1]*resolution,
-            'y_values' : y_values
-        }
-
-def lens_gen_quadratic(resolution, a):
-
-    y_values = np.linspace(-1, 1, resolution)
-
-    return {
-        'x_values' : a*y_values**2,
-        'dx' : 2 * a * y_values,
-        'y_values' : y_values
-    }
-
-def lens_gen_sphere(resolution, r):
-
-    y_values = np.linspace(-1, 1, resolution)
-
-    return {
-        'x_values' : np.sqrt(r**2 - y_values**2),
-        'dx' : -y_values / np.sqrt(r**2 - y_values**2),
-        'y_values' : y_values
-    }
-
-def lens_asphere(resolution, R, k, a):
-
-    y_values = np.linspace(-1, 1, resolution)
-
-    x = y_values**2 / (R * (1 + np.sqrt(1 - (1 + k) * y_values**2 / R**2)))
-
-    for i, alpha in enumerate(a):
-        x += alpha * y_values**(i+4)
-
-    #https://www.wolframalpha.com/input?i=derivative+of+y%28x%29%3D%28x%5E2%29%2F%28R*%281%2B%28sqrt%281-%281%2Bk%29*x%5E2%2FR%5E2%29%29%29
-
-    dx = (R * x * np.sqrt(1 - ((k + 1) * x**2) / R**2)) / (R**2 - (k + 1) * x**2)
-
-    for i, alpha in enumerate(a):
-        dx += (i+4) * alpha * y_values**(i+3)
-
-    return {
-        'x_values' : x,
-        'dx' : dx,
-        'y_values' : y_values
-    }
-
-def lens_asphere(resolution, R, k, a):
-
-    y = np.linspace(-1, 1, resolution)
-
-    sqrt_el = np.sqrt(1 - ((1 + k)*y**2)/R**2)
-
-    x = y**2 / (R * (1 + sqrt_el))
-
-    for i in range(len(a)):
-        x += a[i] * y**(4 + i*2)
-
-    dx = 2*y / (R*(sqrt_el + 1)) + ((k + 1) * y**3) / (R**3*(sqrt_el)*(sqrt_el + 1)**2)
-
-    for i in range(len(a)):
-        dx += (4 + i*2) * a[i] * (4 + i*2 - 1)
-
-    return {
-        'x_values' : x,
-        'dx' : dx,
-        'y_values' : y
-    }
-
-def rays_gen_parallel(start, end, n, direction):
-    
-        dir_x = np.linspace(start[0], end[0], n)
-        dir_y = np.linspace(start[1], end[1], n)
-
-        rays = []
-
-        for i in range(n):
-            rays.append(ray(strenght=1, origin=(dir_x[i], dir_y[i]), dir=direction))
-
-        return rays
-
-def rays_gen_point(start, n, angle_start = 0, angle_end = 2*np.pi, color = 'g'):
-    
-        rays = []
-    
-        angle = np.linspace(angle_start, angle_end, n)
-        for i in range(n):
-            rays.append(ray(strenght=1, origin=start, dir=(np.cos(angle[i]), np.sin(angle[i])), color=color))
-    
-        return rays
-
-lente_gippo = lens(
-    x = [-0.263 , 0.263 ],
-    y = [-1, 1],
-    dx = [0.263, 0.263],
-    refidx_l = 1,
-    refidx_r = 1.5,
-    refl_coeff = 0.25,
-    trans_coeff=0.6
-)
-
-lens0 = lens(
-    x =  lens_asphere(100, 1, -1, [-0.7])['x_values'],
-    y =  lens_asphere(100, 1, -1, [-0.7])['y_values'],
-    dx = lens_asphere(100, 1, -1, [-0.7])['dx'],
-    refidx_l = 1,
-    refidx_r = 1.5,
-    refl_coeff = 0.25,
-    trans_coeff=0.6
-)
-
-sensor = lens(
-    x=[5, 5],
-    y=[-1, 1],
-    dx=[0, 0],
-    refidx_l=1,
-    refidx_r=1,
-    refl_coeff=0,
-    trans_coeff=0
-)
-
-lens_sys0 = lens_system((0, 0))
-lens_sys0.add_lens(lens0)
-#lens_sys0.add_lens(lens1, offset=(2, 0))
-#lens_sys0.add_lens(lens2, offset=(1, 0))
-
-lens_sys0.add_boundary(refl_coeff=0.5)
-lens_sys0.add_boundary(refl_coeff=0.5)
-
+# Initiate the plot
 plt.figure()
-lens_sys0.plot(plt)
-
-#rays = rays_gen_parallel(start=(-1.5, -0.5), end=(-1.5, 0), n=1, direction=(0.939, 0.342))
-rays = rays_gen_point(start=(-3, 0), n=10, angle_start=-0.25, angle_end=0.25, color='red')
-#rays.extend(rays_gen_point(start=(-3, -0.25), n=30, angle_start=-0.1, angle_end=0.2, color='blue'))
-
-result = lens_sys0.intersect(rays)
-
-sensor.plot(plt)
-image = []
-for r in result[-1]:
-    _, a = sensor.intersect(r)
-    if a is not None:
-        image.append((a.origin, a.color))
-
-for dot in image:
-    plt.plot(dot[0][0], dot[0][1], dot[1][0]+'o', alpha=0.5)
-
-cmap = plt.get_cmap('hsv')
-for i, rays in enumerate(result):
-
-    color = cmap(i / len(result))
-
-    for r in rays:
-        r.plot(plt, color=color, alpha=np.clip(r.strength, 0, 1))
-        r.plot(plt, color=r.color, alpha=np.clip(r.strength, 0, 1))
-        print(r)
-
-plt.ylim(-2, 2)
-plt.xlim(-2, 2)
-
-plt.show()
-
-
-import sys
-sys.exit()
-y_values = np.linspace(-1, 1, 100)
-
-x_values = +0.4*y_values**2
-
-dx = +2 * 0.4* y_values
-
-x_values1 = -0.6*y_values**2
-
-dx1 = -2 * 0.6* y_values
-
-startlense = lens(x = [-2, -2], y = [-2, 2], dx = [0, 0], refidx_l = 1, refidx_r = 1, refl_coeff = 0, trans_coeff=1)
-
-lens0 = lens(x = x_values - 0.5, y = y_values, dx = dx, refidx_l = 1, refidx_r = 1.5, refl_coeff = 0.25, trans_coeff=0.6)
-
-lens1 = lens(x = x_values1 + 1, y = y_values, dx = dx1, refidx_l = 1.5, refidx_r = 1, refl_coeff = 0, trans_coeff=0.6)
-
-endlense = lens(x = [2, 2], y = [-2, 2], dx = [0, 0], refidx_l = 1, refidx_r = 1, refl_coeff = 0, trans_coeff=1)
-
-rays = [[], [], [], []]
-
-for i in np.linspace(-1,1 , 19):
-    # Random matplotlib color
-
-    color = np.random.rand(3,)
-
-    rays[0].append(ray(strenght=1, origin=(-1.5, i), dir=(1, 0), color=color))
-
-plt.figure()
-
-for el in startlense.segments:
-    plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], alpha=0.5, color='black')
-
-for el in lens0.segments:
-    plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], alpha=0.5, color='black')
-
-for el in lens1.segments:
-    plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], alpha=0.5, color='black')
-
-for el in endlense.segments:
-    plt.plot([el[0][0], el[1][0]], [el[0][1], el[1][1]], alpha=0.5, color='black')
-
-#for point in lens0.points:
-#    plt.plot(point[0], point[1], 'ro', alpha=0.5)
-
-for r in rays[0]:
-    r1, r2 = lens0.intersect(r)
-    rays[1].append(r1)
-    rays[2].append(r2)
-
-# Back reflections termination
-for r in rays[1]:
-    if r is not None:
-        r1, r2 = startlense.intersect(r)
-
-# Transmitted rays, to the second lense
-for r in rays[2]:
-    if r is not None:
-        r1, r2 = lens1.intersect(r)
-        rays[3].append(r2)
-
-# Transmitted rays termination
-for r in rays[3]:
-    if r is not None:
-        r1, r2 = endlense.intersect(r)
-
-for r in rays[0]:
-    if r is not None:
-        r.plot(plt, color=r.color, alpha=np.clip(r.strength, 0, 1))
-
-for r in rays[1]:
-    if r is not None:
-        r.plot(plt, color=r.color, alpha=np.clip(r.strength, 0, 1))
-
-for r in rays[2]:
-    if r is not None:
-        r.plot(plt, color=r.color, alpha=np.clip(r.strength, 0, 1))
-
-for r in rays[3]:
-    if r is not None:
-        r.plot(plt, color=r.color, alpha=np.clip(r.strength, 0, 1))
-
+plt.xlim(-1, 1.5)
 plt.ylim(-1, 1)
-plt.xlim(-1.5, 2)
+
+# Plot the lenses
+for lens in lenses:
+    lens.plot(plt, color = 'red')
+
+# Plot the rays
+for ray in rays_done:
+    ray.plot(plt)
 
 plt.show()
