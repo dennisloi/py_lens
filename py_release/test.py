@@ -1,9 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from time import time
+import time
 from lens import Lens
-from ray import Ray
-from ray_utils import ray_lens_bb_intersect, ray_lens_intersect, reflected_transmitted_rays
+import ray
+from ray import Ray, ray_lens_bb_intersect, ray_lens_intersect, reflected_transmitted_rays
 
 MINIMUM_DISTANCE = 1e-6
 RAY_STRENGHT_THRESHOLD = 0.1
@@ -12,8 +12,8 @@ ITERACTIONS_LIMIT = 10000
 test_rays = Ray.from_point(start=(-0.5, 0), n=12, angle_start=-1.2, angle_end=1.2, color='red')
 test_rays_seg = Ray.from_segment(segment=((-1, -0.9), (-1, 0.9)), n=10, direction=(1, 0), color='blue')
 test_rays_segment = Ray.from_segment(segment=((-0.5, -1), (0, 1)), n=100, direction=(1, 0), color='blue')
-test_lens0 = Lens.lens_asphere(res = 100, R = 1, k = -1, a = [0], refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
-test_lens1 = Lens.lens_asphere(res = 100, R = 1, k = -0.1, a = [0], refidx_l=1.5, refidx_r=1, refl_coeff=0.3)
+test_lens0 = Lens.lens_asphere(res = 100, r = 1, k = -1, a = [0], refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
+test_lens1 = Lens.lens_asphere(res = 100, r = 1, k = -0.1, a = [0], refidx_l=1.5, refidx_r=1, refl_coeff=0.3)
 test_seg_lens = Lens.lens_segment(res = 100, start = (1, -1), end = (-1, 1), refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
 test_seg_lens2 = Lens.lens_segment(res = 100, start = (1, -1), end = (-1, 1), refidx_l=1, refidx_r=1.5, refl_coeff=0.3)
 test_seg_lens2.move(0.3, 0)
@@ -60,7 +60,7 @@ while len(rays_pool) > 0:
                 intersected_point = intersection
                 intersected_lens = lens
                 intersected_index = index
-    if hit == True:
+    if hit is True:
         # Close the current ray
         current_ray.end(intersected_point)
         rays_done.append(current_ray)
@@ -80,7 +80,7 @@ while len(rays_pool) > 0:
         
     else:
         #TODO, maybe terminate the ray at the limit of the current window? or inf (idk if possible)?
-        current_ray.end(current_ray.origin + current_ray.dir * 10)
+        current_ray.end(current_ray.origin + current_ray.direction * 10)
         rays_done.append(current_ray)
         continue
 
@@ -104,7 +104,7 @@ for lens in lenses:
 
 # Plot the rays
 for ray in rays_done:
-    ray.plot(plt)
+    ray.plot(ray)
 
 plt.grid()
 plt.show()
